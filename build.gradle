@@ -932,7 +932,7 @@ project(':core') {
       exclude group: 'junit', module: 'junit'
     }
     testImplementation libs.caffeine
-    
+
     generator project(':generator')
   }
 
@@ -2041,6 +2041,9 @@ project(':streams') {
     testImplementation libs.hamcrest
     testImplementation libs.mockitoInline // supports mocking static methods, final classes, etc.
     testImplementation libs.mockitoJunitJupiter // supports MockitoExtension
+    testImplementation "org.testcontainers:junit-jupiter:1.18.3"
+    testImplementation "org.testcontainers:kafka:1.18.3"
+    testImplementation "org.testcontainers:testcontainers:1.18.3"
 
     testRuntimeOnly project(':streams:test-utils')
     testRuntimeOnly libs.slf4jlog4j
