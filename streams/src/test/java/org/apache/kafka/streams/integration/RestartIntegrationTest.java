@@ -5,18 +5,17 @@
 
 package org.apache.kafka.streams.integration;
 
-import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.*;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.common.TopicCollection;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.common.utils.Bytes;
 import org.apache.kafka.streams.*;
+import org.apache.kafka.streams.integration.utils.EmbeddedKafkaCluster;
 import org.apache.kafka.streams.kstream.Consumed;
 import org.apache.kafka.streams.kstream.Grouped;
 import org.apache.kafka.streams.kstream.Materialized;
@@ -26,21 +25,13 @@ import org.apache.kafka.streams.processor.TimestampExtractor;
 import org.apache.kafka.streams.state.SessionBytesStoreSupplier;
 import org.apache.kafka.streams.state.SessionStore;
 import org.apache.kafka.streams.state.Stores;
-import org.apache.kafka.test.IntegrationTest;
-import org.junit.experimental.categories.Category;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Tag;
-import org.junit.jupiter.api.Test;
-import org.testcontainers.containers.KafkaContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.utility.DockerImageName;
+import org.junit.jupiter.api.*;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -52,65 +43,60 @@ class TimeExtractor implements TimestampExtractor {
   }
 }
 
+@Timeout(600)
 @Tag("integration")
 public class RestartIntegrationTest {
+  private static final int NUM_BROKERS = 1;
+
+  public static final EmbeddedKafkaCluster CLUSTER = new EmbeddedKafkaCluster(NUM_BROKERS);
+
+  @AfterAll
+  public static void closeCluster() {
+    CLUSTER.stop();
+  }
   private static final String key = "key";
 
-  private static Admin admin;
   private static KafkaConsumer<String, String> consumer;
   private static KafkaProducer<String, String> producer;
-  private static Properties adminProps = new Properties();
   private static Properties kafkaStreamsProps = new Properties();
   private static Properties producerProps = new Properties();
   private static Properties consumerProps = new Properties();
 
   private static final List<NewTopic> topics = new ArrayList<>();
 
-  @Container
-  private static final KafkaContainer kafka = new KafkaContainer(DockerImageName.parse("confluentinc/cp-kafka:7.4.1.arm64"));
-
   @BeforeAll
-  static void beforeAll() {
-    kafka.start();
+  static void beforeAll() throws IOException, InterruptedException {
+    CLUSTER.start();
+    CLUSTER.createTopics("input");
+    CLUSTER.createTopics("output");
 
     String applicationId = "integration-test-" + Instant.now().toEpochMilli();
 
     kafkaStreamsProps.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
     kafkaStreamsProps.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
     kafkaStreamsProps.put(StreamsConfig.APPLICATION_ID_CONFIG, applicationId);
-    kafkaStreamsProps.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers());
+    kafkaStreamsProps.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, CLUSTER.bootstrapServers());
 
-    producerProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers());
+    producerProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, CLUSTER.bootstrapServers());
     producerProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
     producerProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
 
-    consumerProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers());
+    consumerProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, CLUSTER.bootstrapServers());
     consumerProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
     consumerProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
     consumerProps.put(ConsumerConfig.GROUP_ID_CONFIG, "integration_test_group_id");
     consumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
 
-    adminProps.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers());
-
-    admin = Admin.create(adminProps);
     consumer = new KafkaConsumer<>(consumerProps);
     producer = new KafkaProducer<>(producerProps);
-
-    topics.add(new NewTopic("input", 1, (short) 1));
-    topics.add(new NewTopic("output", 1, (short) 1));
-
-    admin.createTopics(topics);
   }
 
   @AfterAll
-  static void afterAll() throws Exception {
+  static void afterAll() {
     producer.close();
     consumer.close();
 
-    List<String> topicNames = topics.stream().map(NewTopic::name).collect(Collectors.toList());
-
-    admin.deleteTopics(TopicCollection.ofTopicNames(topicNames)).all().get();
-    admin.close();
+    CLUSTER.stop();
   }
 
   StreamsBuilder getTopology() {
@@ -209,7 +195,7 @@ public class RestartIntegrationTest {
     sessions = readUntilTime(
       consumer,
       Arrays.asList("output"),
-      15L
+      60L
     );
 
     kafkaStreams.close();
