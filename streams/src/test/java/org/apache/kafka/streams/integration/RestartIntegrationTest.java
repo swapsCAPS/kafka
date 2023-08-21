@@ -32,6 +32,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -47,6 +48,8 @@ class TimeExtractor implements TimestampExtractor {
 @Tag("integration")
 public class RestartIntegrationTest {
   private static final int NUM_BROKERS = 1;
+  private static String applicationId;
+  private static final String STORE_NAME = "le_store";
 
   public static final EmbeddedKafkaCluster CLUSTER = new EmbeddedKafkaCluster(NUM_BROKERS);
 
@@ -54,9 +57,12 @@ public class RestartIntegrationTest {
   public static void closeCluster() {
     CLUSTER.stop();
   }
+
   private static final String key = "key";
 
+
   private static KafkaConsumer<String, String> consumer;
+  private static KafkaConsumer<String, String> changeLogConsumer;
   private static KafkaProducer<String, String> producer;
   private static Properties kafkaStreamsProps = new Properties();
   private static Properties producerProps = new Properties();
@@ -70,7 +76,7 @@ public class RestartIntegrationTest {
     CLUSTER.createTopics("input");
     CLUSTER.createTopics("output");
 
-    String applicationId = "integration-test-" + Instant.now().toEpochMilli();
+    applicationId = "integration-test-" + Instant.now().toEpochMilli();
 
     kafkaStreamsProps.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
     kafkaStreamsProps.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
@@ -87,7 +93,13 @@ public class RestartIntegrationTest {
     consumerProps.put(ConsumerConfig.GROUP_ID_CONFIG, "integration_test_group_id");
     consumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
 
+    Properties changeLogConsumerProps = new Properties();
+    changeLogConsumerProps.putAll(consumerProps);
+    changeLogConsumerProps.put(ConsumerConfig.GROUP_ID_CONFIG, "changelog_consumer_integration_test_group_id");
+
+
     consumer = new KafkaConsumer<>(consumerProps);
+    changeLogConsumer = new KafkaConsumer<>(changeLogConsumerProps);
     producer = new KafkaProducer<>(producerProps);
   }
 
@@ -95,6 +107,7 @@ public class RestartIntegrationTest {
   static void afterAll() {
     producer.close();
     consumer.close();
+    changeLogConsumer.close();
 
     CLUSTER.stop();
   }
@@ -105,7 +118,7 @@ public class RestartIntegrationTest {
     SessionWindows windowedBy = SessionWindows.ofInactivityGapWithNoGrace(Duration.ofMinutes(1));
 
     // Breaks
-    SessionBytesStoreSupplier store = Stores.inMemorySessionStore("le_store", Duration.ofMinutes(2));
+    SessionBytesStoreSupplier store = Stores.inMemorySessionStore(STORE_NAME, Duration.ofMinutes(2));
 
     // Works
     // SessionBytesStoreSupplier store = Stores.persistentSessionStore("le_store", Duration.ofMinutes(2));
@@ -156,7 +169,8 @@ public class RestartIntegrationTest {
 
   List<ConsumerRecord<String, String>> startProcessingAndClose(
     List<KeyValue<String, String>> messages,
-    boolean shouldClean) throws InterruptedException {
+    boolean shouldClean
+  ) throws InterruptedException {
     StreamsBuilder builder = getTopology();
     Topology topology = builder.build();
 
@@ -191,8 +205,7 @@ public class RestartIntegrationTest {
       Thread.sleep(1);
     }
 
-    List<ConsumerRecord<String, String>> sessions;
-    sessions = readUntilTime(
+    List<ConsumerRecord<String, String>> sessions = readUntilTime(
       consumer,
       Arrays.asList("output"),
       60L
@@ -225,19 +238,30 @@ public class RestartIntegrationTest {
     secondBatch.addAll(closer);
 
     List<ConsumerRecord<String, String>> beforeRestart = startProcessingAndClose(firstBatch, true);
-    List<String> beforeRestartValues = new ArrayList<>();
-    for (ConsumerRecord<String, String> record : beforeRestart) {
-      beforeRestartValues.add(record.value());
-    }
-
-    List<ConsumerRecord<String, String>> afterRestart = startProcessingAndClose(secondBatch, false);
-    List<String> afterRestartValues = new ArrayList<>();
-    for (ConsumerRecord<String, String> record : afterRestart) {
-      afterRestartValues.add(record.value());
-    }
+    List<String> beforeRestartValues = beforeRestart.stream().map(ConsumerRecord::value).collect(Collectors.toList());
 
     List<String> expectedBeforeRestart = new ArrayList<>();
     expectedBeforeRestart.add("[" + key + "@60000/65000]: " + sessionToAggregatedString(session1));
+
+    String changeLogTopic = applicationId + "-" + STORE_NAME + "-changelog-0";
+    changeLogConsumer.subscribe(Arrays.asList(changeLogTopic));
+
+    List<ConsumerRecord<String, String>> changeLogData = new ArrayList<>();
+    Instant stopAt = Instant.now().plusSeconds(30);
+    while (Instant.now().isBefore(stopAt)) {
+      ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(1000));
+      records.forEach(changeLogData::add);
+    }
+
+    for (ConsumerRecord<String, String> msg : changeLogData) {
+      System.out.print("key: ");
+      System.out.println(msg.key());
+      System.out.print("value: ");
+      System.out.println(msg.value());
+    }
+
+    List<ConsumerRecord<String, String>> afterRestart = startProcessingAndClose(secondBatch, false);
+    List<String> afterRestartValues = afterRestart.stream().map(ConsumerRecord::value).collect(Collectors.toList());
 
     List<String> expectedAfterRestart = new ArrayList<>();
     expectedAfterRestart.add("[" + key + "@180000/185000]: " + sessionToAggregatedString(session2));
