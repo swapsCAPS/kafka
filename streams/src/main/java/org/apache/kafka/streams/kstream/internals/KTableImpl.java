@@ -574,6 +574,7 @@ public class KTableImpl<K, S, V> extends AbstractStream<K, V> implements KTable<
 
         if (suppressedInternal.bufferConfig().isLoggingEnabled()) {
             final Map<String, String> topicConfig = suppressedInternal.bufferConfig().getLogConfig();
+            // This the thing we call .put() on
             storeBuilder = new InMemoryTimeOrderedKeyValueChangeBuffer.Builder<>(
                 storeName,
                 keySerde,

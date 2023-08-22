@@ -115,24 +115,23 @@ public class RestartIntegrationTest {
   StreamsBuilder getTopology() {
     StreamsBuilder builder = new StreamsBuilder();
 
-    SessionWindows windowedBy = SessionWindows.ofInactivityGapWithNoGrace(Duration.ofMinutes(1));
-
     // Breaks
-    SessionBytesStoreSupplier store = Stores.inMemorySessionStore(STORE_NAME, Duration.ofMinutes(2));
+    Materialized.StoreType storeType = Materialized.StoreType.IN_MEMORY;
 
     // Works
-    // SessionBytesStoreSupplier store = Stores.persistentSessionStore("le_store", Duration.ofMinutes(2));
-
-    Materialized<String, String, SessionStore<Bytes, byte[]>> materialized = Materialized.as(store);
+    // Materialized.StoreType storeType = Materialized.StoreType.ROCKS_DB;
 
     builder.stream("input",
         Consumed.with(Serdes.String(), Serdes.String()).withTimestampExtractor(new TimeExtractor()))
       .peek((k, v) -> System.out.println("input k: " + k + " v: " + v))
       .mapValues(v -> v.split("\\.")[1])
-      .groupByKey(Grouped.with(Serdes.String(), Serdes.String()))
-      .windowedBy(windowedBy)
-      .reduce((agg, curr) -> agg + " " + curr, materialized)
-      .suppress(Suppressed.untilWindowCloses(Suppressed.BufferConfig.unbounded()))
+      .groupByKey()
+      .windowedBy(SessionWindows.ofInactivityGapWithNoGrace(Duration.ofMinutes(1)))
+      .reduce(
+        (agg, curr) -> agg + " " + curr,
+        Materialized.<String, String, SessionStore<Bytes, byte[]>>as(STORE_NAME).withStoreType(storeType)
+      )
+//      .suppress(Suppressed.untilWindowCloses(Suppressed.BufferConfig.unbounded()))
       .toStream()
       .peek((k, v) -> System.out.println("output k: " + k + " v: " + v))
       .mapValues((k, v) -> k + ": " + v)
@@ -208,7 +207,7 @@ public class RestartIntegrationTest {
     List<ConsumerRecord<String, String>> sessions = readUntilTime(
       consumer,
       Arrays.asList("output"),
-      60L
+      30L
     );
 
     kafkaStreams.close();
@@ -243,17 +242,22 @@ public class RestartIntegrationTest {
     List<String> expectedBeforeRestart = new ArrayList<>();
     expectedBeforeRestart.add("[" + key + "@60000/65000]: " + sessionToAggregatedString(session1));
 
+    // integration-test-1692704352286-le_store-changelog-0
     String changeLogTopic = applicationId + "-" + STORE_NAME + "-changelog-0";
-    changeLogConsumer.subscribe(Arrays.asList(changeLogTopic));
+    changeLogConsumer.subscribe(Arrays.asList(
+      changeLogTopic,
+      applicationId + "-KTABLE-SUPPRESS-STATE-STORE-0000000005-changelog"
+    ));
 
     List<ConsumerRecord<String, String>> changeLogData = new ArrayList<>();
     Instant stopAt = Instant.now().plusSeconds(30);
     while (Instant.now().isBefore(stopAt)) {
-      ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(1000));
+      ConsumerRecords<String, String> records = changeLogConsumer.poll(Duration.ofMillis(1000));
       records.forEach(changeLogData::add);
     }
 
     for (ConsumerRecord<String, String> msg : changeLogData) {
+      System.out.println(msg.topic());
       System.out.print("key: ");
       System.out.println(msg.key());
       System.out.print("value: ");

@@ -65,6 +65,7 @@ import static org.apache.kafka.streams.state.internals.TimeOrderedKeyValueBuffer
 import static org.apache.kafka.streams.state.internals.TimeOrderedKeyValueBufferChangelogDeserializationHelper.deserializeV3;
 import static org.apache.kafka.streams.state.internals.TimeOrderedKeyValueBufferChangelogDeserializationHelper.duckTypeV2;
 
+// This might have an issue!
 public final class InMemoryTimeOrderedKeyValueChangeBuffer<K, V, T> implements TimeOrderedKeyValueBuffer<K, V, Change<V>> {
     private static final BytesSerializer KEY_SERIALIZER = new BytesSerializer();
     private static final ByteArraySerializer VALUE_SERIALIZER = new ByteArraySerializer();
@@ -262,6 +263,8 @@ public final class InMemoryTimeOrderedKeyValueChangeBuffer<K, V, T> implements T
         if (loggingEnabled) {
             // counting on this getting called before the record collector's flush
             for (final Bytes key : dirtyKeys) {
+              System.out.print("dingen: ");
+              System.out.println(key.toString());
 
                 final BufferKey bufferKey = index.get(key);
 
@@ -476,6 +479,7 @@ public final class InMemoryTimeOrderedKeyValueChangeBuffer<K, V, T> implements T
         }
     }
 
+    // Who calls me? Probably suppress thingy?
     @Override
     public boolean put(final long time,
                        final Record<K, Change<V>> record,
@@ -511,6 +515,11 @@ public final class InMemoryTimeOrderedKeyValueChangeBuffer<K, V, T> implements T
         return bufferKey == null ? null : sortedMap.get(bufferKey);
     }
 
+    // The moment we get time 185000 here we are already a different key... Look further upstream!
+    // Where do we call cleanPut from for time 185000?
+    // - this.put()?
+    // Also. Where does the session key actually get calculated?
+    // When we get 182000 next key is calculated as: `key\x00\x00\x00\x00\x00\x02\xC6\xF0\x00\x00\x00\x00\x00\x02\xBF`
     private void cleanPut(final long time, final Bytes key, final BufferValue value) {
         // non-resetting semantics:
         // if there was a previous version of the same record,

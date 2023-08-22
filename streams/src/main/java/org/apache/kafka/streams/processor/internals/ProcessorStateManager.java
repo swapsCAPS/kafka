@@ -235,6 +235,7 @@ public class ProcessorStateManager implements StateManager {
     }
 
     // package-private for test only
+  // Looks like we init with storeDirIsEmpty true, makes sense as we use in-mem store
     void initializeStoreOffsetsFromCheckpoint(final boolean storeDirIsEmpty) {
         try {
             final Map<TopicPartition, Long> loadedCheckpoints = checkpointFile.read();
@@ -250,6 +251,7 @@ public class ProcessorStateManager implements StateManager {
                 if (store.changelogPartition == null) {
                     log.info("State store {} is not logged and hence would not be restored", store.stateStore.name());
                 } else if (!store.stateStore.persistent()) {
+                  // we get here right.
                     log.info("Initializing to the starting offset for changelog {} of in-memory state store {}",
                              store.changelogPartition, store.stateStore.name());
                 } else if (store.offset() == null) {

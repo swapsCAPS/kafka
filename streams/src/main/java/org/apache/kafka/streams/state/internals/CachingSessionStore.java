@@ -93,6 +93,7 @@ class CachingSessionStore
         });
     }
 
+    // Hmm what's this?
     private void putAndMaybeForward(final ThreadCache.DirtyEntry entry, final InternalProcessorContext<?, ?> context) {
         final Bytes binaryKey = cacheFunction.key(entry.key());
         final Windowed<Bytes> bytesKey = SessionKeySchema.from(binaryKey);

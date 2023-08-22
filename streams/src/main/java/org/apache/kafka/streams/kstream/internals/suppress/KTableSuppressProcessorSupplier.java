@@ -159,6 +159,8 @@ public class KTableSuppressProcessorSupplier<K, V> implements
         }
 
         @Override
+        // Who calls meeee?!
+        // We never see 180000 to 182000 here! But it is emited : )
         public void process(final Record<K, Change<V>> record) {
             observedStreamTime = Math.max(observedStreamTime, record.timestamp());
             buffer(record);

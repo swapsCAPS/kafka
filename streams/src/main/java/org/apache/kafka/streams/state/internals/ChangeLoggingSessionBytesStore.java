@@ -30,6 +30,8 @@ import static org.apache.kafka.streams.processor.internals.ProcessorContextUtils
 /**
  * Simple wrapper around a {@link SessionStore} to support writing
  * updates to a changelog
+ *
+ * AAaaaah but what about reading my friend?
  */
 public class ChangeLoggingSessionBytesStore
     extends WrappedStateStore<SessionStore<Bytes, byte[]>, byte[], byte[]>

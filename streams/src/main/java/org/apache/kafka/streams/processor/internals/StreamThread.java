@@ -904,6 +904,7 @@ public class StreamThread extends Thread {
                 setState(State.RUNNING);
             }
 
+          log.info("Initialization call done. State is {}", state);
             if (log.isDebugEnabled()) {
                 log.debug("Initialization call done. State is {}", state);
             }

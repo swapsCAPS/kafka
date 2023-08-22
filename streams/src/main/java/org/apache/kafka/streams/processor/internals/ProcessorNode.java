@@ -144,6 +144,8 @@ public class ProcessorNode<KIn, VIn, KOut, VOut> {
     }
 
 
+    // The record we get here after we've loggen "in: 184000" is key@183000/183000 so we already are not using the proper key...
+  // Makes me feel like we should be looking further upstream...
     public void process(final Record<KIn, VIn> record) {
         throwIfClosed();
 
