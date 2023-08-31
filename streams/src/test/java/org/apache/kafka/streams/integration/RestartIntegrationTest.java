@@ -5,7 +5,6 @@
 
 package org.apache.kafka.streams.integration;
 
-import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.*;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
@@ -16,21 +15,18 @@ import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.common.utils.Bytes;
 import org.apache.kafka.streams.*;
 import org.apache.kafka.streams.integration.utils.EmbeddedKafkaCluster;
-import org.apache.kafka.streams.kstream.Consumed;
-import org.apache.kafka.streams.kstream.Grouped;
-import org.apache.kafka.streams.kstream.Materialized;
-import org.apache.kafka.streams.kstream.SessionWindows;
-import org.apache.kafka.streams.kstream.Suppressed;
+import org.apache.kafka.streams.kstream.*;
 import org.apache.kafka.streams.processor.TimestampExtractor;
-import org.apache.kafka.streams.state.SessionBytesStoreSupplier;
 import org.apache.kafka.streams.state.SessionStore;
-import org.apache.kafka.streams.state.Stores;
 import org.junit.jupiter.api.*;
 
 import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Properties;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
@@ -67,8 +63,6 @@ public class RestartIntegrationTest {
   private static Properties kafkaStreamsProps = new Properties();
   private static Properties producerProps = new Properties();
   private static Properties consumerProps = new Properties();
-
-  private static final List<NewTopic> topics = new ArrayList<>();
 
   @BeforeAll
   static void beforeAll() throws IOException, InterruptedException {
@@ -117,21 +111,26 @@ public class RestartIntegrationTest {
 
     // Breaks
     Materialized.StoreType storeType = Materialized.StoreType.IN_MEMORY;
-
     // Works
     // Materialized.StoreType storeType = Materialized.StoreType.ROCKS_DB;
+
+    // Same behavior for session windows AND time windows...
+    // Windows windowBy = TimeWindows.ofSizeWithNoGrace(Duration.ofMinutes(1));
+    // Materialized<String, String, WindowStore<Bytes, byte[]>> materialize =
+    //   Materialized.<String, String, WindowStore<Bytes, byte[]>>as(STORE_NAME).withStoreType(storeType);
+
+     SessionWindows windowBy = SessionWindows.ofInactivityGapWithNoGrace(Duration.ofMinutes(1));
+     Materialized<String, String, SessionStore<Bytes, byte[]>> materialize =
+       Materialized.<String, String, SessionStore<Bytes, byte[]>>as(STORE_NAME).withStoreType(storeType);
 
     builder.stream("input",
         Consumed.with(Serdes.String(), Serdes.String()).withTimestampExtractor(new TimeExtractor()))
       .peek((k, v) -> System.out.println("input k: " + k + " v: " + v))
       .mapValues(v -> v.split("\\.")[1])
       .groupByKey()
-      .windowedBy(SessionWindows.ofInactivityGapWithNoGrace(Duration.ofMinutes(1)))
-      .reduce(
-        (agg, curr) -> agg + " " + curr,
-        Materialized.<String, String, SessionStore<Bytes, byte[]>>as(STORE_NAME).withStoreType(storeType)
-      )
-//      .suppress(Suppressed.untilWindowCloses(Suppressed.BufferConfig.unbounded()))
+      .windowedBy(windowBy)
+      .reduce( (agg, curr) -> agg + " " + curr, materialize)
+      .suppress(Suppressed.untilWindowCloses(Suppressed.BufferConfig.unbounded()))
       .toStream()
       .peek((k, v) -> System.out.println("output k: " + k + " v: " + v))
       .mapValues((k, v) -> k + ": " + v)
@@ -236,42 +235,27 @@ public class RestartIntegrationTest {
     secondBatch.addAll(session3);
     secondBatch.addAll(closer);
 
+    // Send the first batch and store the output data
     List<ConsumerRecord<String, String>> beforeRestart = startProcessingAndClose(firstBatch, true);
     List<String> beforeRestartValues = beforeRestart.stream().map(ConsumerRecord::value).collect(Collectors.toList());
 
-    List<String> expectedBeforeRestart = new ArrayList<>();
-    expectedBeforeRestart.add("[" + key + "@60000/65000]: " + sessionToAggregatedString(session1));
-
-    // integration-test-1692704352286-le_store-changelog-0
-    String changeLogTopic = applicationId + "-" + STORE_NAME + "-changelog-0";
-    changeLogConsumer.subscribe(Arrays.asList(
-      changeLogTopic,
-      applicationId + "-KTABLE-SUPPRESS-STATE-STORE-0000000005-changelog"
-    ));
-
-    List<ConsumerRecord<String, String>> changeLogData = new ArrayList<>();
-    Instant stopAt = Instant.now().plusSeconds(30);
-    while (Instant.now().isBefore(stopAt)) {
-      ConsumerRecords<String, String> records = changeLogConsumer.poll(Duration.ofMillis(1000));
-      records.forEach(changeLogData::add);
-    }
-
-    for (ConsumerRecord<String, String> msg : changeLogData) {
-      System.out.println(msg.topic());
-      System.out.print("key: ");
-      System.out.println(msg.key());
-      System.out.print("value: ");
-      System.out.println(msg.value());
-    }
-
+    // Send the second batch and store the output data
     List<ConsumerRecord<String, String>> afterRestart = startProcessingAndClose(secondBatch, false);
     List<String> afterRestartValues = afterRestart.stream().map(ConsumerRecord::value).collect(Collectors.toList());
 
+    // The values we expect _before_ the restart
+    List<String> expectedBeforeRestart = new ArrayList<>();
+    expectedBeforeRestart.add("[" + key + "@60000/65000]: " + sessionToAggregatedString(session1));
+
+    // The values we expect _after_ the restart
     List<String> expectedAfterRestart = new ArrayList<>();
     expectedAfterRestart.add("[" + key + "@180000/185000]: " + sessionToAggregatedString(session2));
     expectedAfterRestart.add("[" + key + "@300000/305000]: " + sessionToAggregatedString(session3));
 
+    // Do the assertions
+    // This passes
     assertEquals(expectedBeforeRestart, beforeRestartValues);
+    // This fails
     assertEquals(expectedAfterRestart, afterRestartValues);
   }
 
